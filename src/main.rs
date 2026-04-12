@@ -44,6 +44,10 @@ enum Commands {
         /// CI mode: exit code 1 if HIGH or higher risk found
         #[arg(long)]
         ci: bool,
+
+        /// Maximum tokens for LLM responses
+        #[arg(long, default_value_t = 2048)]
+        max_tokens: u32,
     },
 }
 
@@ -59,6 +63,7 @@ async fn main() -> Result<(), anyhow::Error> {
             quick,
             verbose,
             ci,
+            max_tokens,
         } => {
             let config = ScanConfig {
                 target_dir: path.unwrap_or_else(|| PathBuf::from(".")),
@@ -67,11 +72,12 @@ async fn main() -> Result<(), anyhow::Error> {
                 quick,
                 verbose,
                 ci_mode: ci,
+                max_tokens,
             };
 
             // Verify API key early
             if ScanConfig::api_key().is_err() {
-                eprintln!("Error: ANTHROPIC_API_KEY environment variable is not set.");
+                eprintln!("Error: ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN environment variable is not set.");
                 std::process::exit(1);
             }
 
@@ -91,10 +97,19 @@ mod scanner {
     use crate::config::ScanConfig;
     use crate::error::SentinelError;
     use crate::threat::ScanResult;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use std::time::Instant;
 
     pub async fn run_scan(config: &ScanConfig) -> Result<ScanResult, SentinelError> {
         let start = Instant::now();
+
+        // Create HTTP client once for reuse
+        // Note: some API gateways (e.g. Alibaba Cloud WAF) block the default reqwest UA
+        let http_client = reqwest::Client::builder()
+            .user_agent("sentinel/0.1.0")
+            .build()
+            .map_err(|e| SentinelError::LlmApi(format!("Failed to build HTTP client: {e}")))?;
 
         // Phase 1: Collect
         let project_files = crate::collector::collect_project(&config.target_dir, config.quick)?;
@@ -115,23 +130,45 @@ mod scanner {
             });
         }
 
-        eprintln!("Found {total} files to scan...\n");
+        // Show progress only in text mode
+        let show_progress = !config.format_json;
+        let done = Arc::new(AtomicUsize::new(0));
 
-        // Phase 2: Analyze in parallel
+        eprintln!("\n  Analyzing {total} file(s)...\n");
+
+        // Phase 2: Analyze in parallel with progress
         let mut handles = Vec::new();
         for file in all_files {
             let config = config.clone();
+            let client = http_client.clone();
+            let progress = Arc::clone(&done);
             let handle = tokio::spawn(async move {
-                match crate::analyzer::analyze_file(&file, &config).await {
-                    Ok(finding) => Some(finding),
-                    Err(e) => {
-                        eprintln!(
-                            "  [WARN] Failed to analyze {}: {e}",
-                            file.path.display()
-                        );
-                        None
+                let path_display = file.path.display().to_string();
+                let result = crate::analyzer::analyze_file(&client, &file, &config).await;
+                let current = progress.fetch_add(1, Ordering::Relaxed) + 1;
+                if show_progress {
+                    match &result {
+                        Ok(finding) => {
+                            eprint!(
+                                "\r  [{:>3}/{total}] {:10} {}",
+                                current,
+                                finding.risk_level.as_str(),
+                                truncate_path(&path_display, 50)
+                            );
+                        }
+                        Err(e) => {
+                            eprint!(
+                                "\r  [{:>3}/{total}] {:<10} {}",
+                                current,
+                                "ERROR",
+                                truncate_path(&path_display, 50)
+                            );
+                            // Print full error on a new line so it isn't overwritten
+                            eprintln!("\n    → {e}");
+                        }
                     }
                 }
+                result.ok()
             });
             handles.push(handle);
         }
@@ -141,6 +178,10 @@ mod scanner {
             if let Ok(Some(finding)) = handle.await {
                 findings.push(finding);
             }
+        }
+
+        if show_progress {
+            eprintln!(); // newline after last progress line
         }
 
         // Sort by risk level (highest first)
@@ -162,5 +203,13 @@ mod scanner {
         }
 
         Ok(result)
+    }
+
+    fn truncate_path(path: &str, max: usize) -> String {
+        if path.len() <= max {
+            path.to_string()
+        } else {
+            format!("...{}", &path[path.len() - max + 3..])
+        }
     }
 }

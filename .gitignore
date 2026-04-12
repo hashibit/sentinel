@@ -31,3 +31,4 @@ dev.db
 # Added by cargo
 
 /target
+.claude/cccombat

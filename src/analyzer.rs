@@ -49,8 +49,9 @@ Additional focus (dot directory file):
 - Is there cross-project persistent malicious configuration?"#;
 
 pub async fn analyze_file(
+    client: &reqwest::Client,
     file: &CollectedFile,
-    _config: &ScanConfig,
+    config: &ScanConfig,
 ) -> Result<Finding, SentinelError> {
     let mut prompt = BASE_AUDIT_PROMPT.to_string();
     prompt.push_str(&format!(
@@ -65,7 +66,7 @@ pub async fn analyze_file(
         prompt.push_str(DOT_DIR_EXTRA);
     }
 
-    let response = call_anthropic_api(&prompt).await?;
+    let response = call_anthropic_api(client, &prompt, config.max_tokens).await?;
 
     // Parse the JSON response from the model
     let analysis = parse_llm_response(&response)?;
@@ -91,13 +92,16 @@ pub async fn analyze_file(
 }
 
 /// Call Anthropic API via reqwest
-pub async fn call_anthropic_api(prompt: &str) -> Result<String, SentinelError> {
-    let api_key = ScanConfig::api_key()?;
+pub async fn call_anthropic_api(
+    client: &reqwest::Client,
+    prompt: &str,
+    max_tokens: u32,
+) -> Result<String, SentinelError> {
+    let (api_key, auth_type) = ScanConfig::api_key()?;
 
-    let client = reqwest::Client::new();
     let body = serde_json::json!({
         "model": ScanConfig::model(),
-        "max_tokens": ScanConfig::max_tokens(),
+        "max_tokens": max_tokens,
         "messages": [
             {
                 "role": "user",
@@ -106,11 +110,25 @@ pub async fn call_anthropic_api(prompt: &str) -> Result<String, SentinelError> {
         ]
     });
 
-    let resp = client
-        .post("https://api.anthropic.com/v1/messages")
-        .header("x-api-key", &api_key)
-        .header("anthropic-version", "2023-06-01")
-        .header("content-type", "application/json")
+    let base_url = ScanConfig::base_url();
+    let endpoint = format!("{base_url}/v1/messages");
+
+    let mut req = client
+        .post(&endpoint)
+        .header("content-type", "application/json");
+
+    match auth_type {
+        crate::config::AuthType::XApiKey => {
+            req = req
+                .header("x-api-key", &api_key)
+                .header("anthropic-version", "2023-06-01");
+        }
+        crate::config::AuthType::Bearer => {
+            req = req.header("authorization", format!("Bearer {api_key}"));
+        }
+    }
+
+    let resp = req
         .json(&body)
         .send()
         .await
@@ -132,11 +150,14 @@ pub async fn call_anthropic_api(prompt: &str) -> Result<String, SentinelError> {
         .await
         .map_err(|e| SentinelError::LlmApi(format!("Failed to parse response: {e}")))?;
 
-    // Extract the text content from the response
+    // Extract the text content from the response (skip thinking blocks)
     let content = json["content"]
         .as_array()
-        .and_then(|arr| arr.first())
-        .and_then(|first| first["text"].as_str())
+        .and_then(|arr| {
+            arr.iter()
+                .find(|block| block["type"].as_str() == Some("text"))
+                .and_then(|block| block["text"].as_str())
+        })
         .ok_or_else(|| SentinelError::ParseError("No text content in API response".into()))?;
 
     Ok(content.to_string())

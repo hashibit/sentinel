@@ -15,18 +15,37 @@ pub struct ScanConfig {
     pub verbose: bool,
     /// CI mode: exit code 1 if HIGH+ risk found
     pub ci_mode: bool,
+    /// Maximum tokens for LLM responses
+    pub max_tokens: u32,
+}
+
+/// Authentication method for the API
+#[derive(Debug, Clone)]
+pub enum AuthType {
+    /// Anthropic native: `x-api-key` header + `anthropic-version`
+    XApiKey,
+    /// OpenAI style: `Authorization: Bearer <key>`
+    Bearer,
 }
 
 impl ScanConfig {
-    pub fn api_key() -> Result<String, SentinelError> {
-        std::env::var("ANTHROPIC_API_KEY").map_err(|_| SentinelError::MissingApiKey)
+    /// Returns (api_key, auth_type) together
+    pub fn api_key() -> Result<(String, AuthType), SentinelError> {
+        if let Ok(key) = std::env::var("ANTHROPIC_AUTH_TOKEN") {
+            return Ok((key, AuthType::Bearer));
+        }
+        if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
+            return Ok((key, AuthType::XApiKey));
+        }
+        Err(SentinelError::MissingApiKey)
     }
 
-    pub fn model() -> &'static str {
-        "claude-sonnet-4-6"
+    pub fn base_url() -> String {
+        std::env::var("ANTHROPIC_BASE_URL")
+            .unwrap_or_else(|_| "https://api.anthropic.com".to_string())
     }
 
-    pub fn max_tokens() -> u32 {
-        1024
+    pub fn model() -> String {
+        std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-sonnet-4-6".to_string())
     }
 }
