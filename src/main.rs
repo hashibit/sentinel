@@ -112,7 +112,17 @@ mod scanner {
             .map_err(|e| SentinelError::LlmApi(format!("Failed to build HTTP client: {e}")))?;
 
         // Phase 1: Collect
+        if !config.format_json {
+            eprint!("  Collecting project files...");
+        }
         let project_files = crate::collector::collect_project(&config.target_dir, config.quick)?;
+
+        if !config.format_json {
+            eprint!(" {} found", project_files.len());
+            if config.scan_home {
+                eprint!(", scanning home...");
+            }
+        }
         let dot_files = crate::collector::collect_dot_dirs(config.scan_home)?;
 
         let all_files: Vec<CollectedFile> = project_files
@@ -122,7 +132,9 @@ mod scanner {
 
         let total = all_files.len();
         if total == 0 {
-            eprintln!("No files found to scan.");
+            if !config.format_json {
+                eprintln!("\n  No files found to scan.");
+            }
             return Ok(ScanResult {
                 findings: vec![],
                 files_scanned: 0,
@@ -134,7 +146,9 @@ mod scanner {
         let show_progress = !config.format_json;
         let done = Arc::new(AtomicUsize::new(0));
 
-        eprintln!("\n  Analyzing {total} file(s)...\n");
+        if !config.format_json {
+            eprintln!("\n\n  Analyzing {total} file(s)...\n");
+        }
 
         // Phase 2: Analyze in parallel with progress
         let mut handles = Vec::new();
