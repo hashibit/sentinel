@@ -11,17 +11,17 @@ AI coding agents read project-local config files (`CLAUDE.md`, `.claude/`, hooks
 - **Privilege escalation** — expanding tool permissions or disabling sandboxes
 - **Persistence** — modifying global config so the behavior carries across projects
 
-You can't read every config file carefully. Sentinel can.
+You can't read every config file carefully. CCCheck can.
 
 ## Core Principles
 
-- **Zero Execution** — Sentinel never executes any code from the scanned project. It only reads text files and sends them to the LLM.
-- **Pure LLM Judgment** — Security analysis is done entirely by the LLM. Sentinel itself contains no heuristic rules about what's "safe" or "dangerous".
-- **No Trust Chain** — Sentinel does not trust, execute, or interpret any file in the scanned project. All audit prompts are hardcoded in Sentinel's own source.
+- **Zero Execution** — CCCheck never executes any code from the scanned project. It only reads text files and sends them to the LLM.
+- **Pure LLM Judgment** — Security analysis is done entirely by the LLM. CCCheck itself contains no heuristic rules about what's "safe" or "dangerous".
+- **No Trust Chain** — CCCheck does not trust, execute, or interpret any file in the scanned project. All audit prompts are hardcoded in CCCheck's own source.
 
 ## Architecture
 
-Sentinel runs three phases:
+CCCheck runs three phases:
 
 ```
 Collect -> Analyze -> Report
@@ -64,42 +64,50 @@ Or output as JSON with `--format json`.
 ## Installation
 
 ```bash
-git clone https://github.com/your-org/sentinel
-cd sentinel
+git clone https://github.com/nickelchen/cccheck
+cd cccheck
 cargo build --release
 ```
+
+The binary will be at `target/release/cccheck`.
 
 ## Usage
 
 ```bash
 # Basic scan of current directory
-sentinel scan
+cargo run -- scan
+
+# Or use the compiled binary
+cccheck scan
 
 # Scan a specific directory
-sentinel scan /path/to/project
+cargo run -- scan /path/to/project
 
 # Quick mode — only P0 files
-sentinel scan --quick
+cargo run -- scan --quick
 
 # Include global dot directories
-sentinel scan --scan-home
+cargo run -- scan --scan-home
 
 # Verbose output with evidence quotes
-sentinel scan --verbose
+cargo run -- scan --verbose
 
 # CI mode — exit code 1 if HIGH+ risk found
-sentinel scan --ci
+cargo run -- scan --ci
 
 # JSON output
-sentinel scan --format json
+cargo run -- scan --format json
+
+# Custom max tokens for LLM responses
+cargo run -- scan --max-tokens 4096
 
 # Combine flags
-sentinel scan --quick --scan-home --ci
+cargo run -- scan --quick --scan-home --ci
 ```
 
 ## Configuration
 
-Sentinel supports two authentication methods, selected by the environment variable name:
+CCCheck supports two authentication methods, selected by the environment variable name:
 
 ```bash
 # Method 1: Anthropic native auth (x-api-key header)
@@ -139,7 +147,7 @@ Add to your CI pipeline to block builds with security findings:
 
 ```yaml
 - name: Security scan
-  run: sentinel scan --ci
+  run: cargo run -- scan --ci
   env:
     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
@@ -148,7 +156,7 @@ Exit code 1 when any finding is `HIGH` or `CRITICAL`.
 
 ## Threat Categories
 
-Sentinel's audit prompt checks for:
+CCCheck's audit prompt checks for:
 
 - **Prompt injection** — Instructions that override or bypass safety guidelines
 - **Data exfiltration** — Sending code, credentials, or environment variables to external URLs
