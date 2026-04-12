@@ -48,6 +48,10 @@ enum Commands {
         /// Maximum tokens for LLM responses
         #[arg(long, default_value_t = 2048)]
         max_tokens: u32,
+
+        /// Max concurrent LLM API requests (env: SENTINEL_CONCURRENCY, default: 8)
+        #[arg(long)]
+        concurrency: Option<usize>,
     },
 }
 
@@ -64,6 +68,7 @@ async fn main() -> Result<(), anyhow::Error> {
             verbose,
             ci,
             max_tokens,
+            concurrency,
         } => {
             let config = ScanConfig {
                 target_dir: path.unwrap_or_else(|| PathBuf::from(".")),
@@ -73,6 +78,7 @@ async fn main() -> Result<(), anyhow::Error> {
                 verbose,
                 ci_mode: ci,
                 max_tokens,
+                concurrency: concurrency.unwrap_or_else(ScanConfig::concurrency),
             };
 
             // Verify API key early
@@ -100,6 +106,7 @@ mod scanner {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::Instant;
+    use tokio::sync::Semaphore;
 
     pub async fn run_scan(config: &ScanConfig) -> Result<ScanResult, SentinelError> {
         let start = Instant::now();
@@ -151,12 +158,15 @@ mod scanner {
         }
 
         // Phase 2: Analyze in parallel with progress
+        let semaphore = Arc::new(Semaphore::new(config.concurrency));
         let mut handles = Vec::new();
         for file in all_files {
             let config = config.clone();
             let client = http_client.clone();
             let progress = Arc::clone(&done);
+            let permit = semaphore.clone().acquire_owned();
             let handle = tokio::spawn(async move {
+                let _permit = permit.await;
                 let path_display = file.path.display().to_string();
                 let result = crate::analyzer::analyze_file(&client, &file, &config).await;
                 let current = progress.fetch_add(1, Ordering::Relaxed) + 1;
@@ -177,7 +187,6 @@ mod scanner {
                                 "ERROR",
                                 truncate_path(&path_display, 50)
                             );
-                            // Print full error on a new line so it isn't overwritten
                             eprintln!("\n    → {e}");
                         }
                     }

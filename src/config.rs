@@ -17,6 +17,8 @@ pub struct ScanConfig {
     pub ci_mode: bool,
     /// Maximum tokens for LLM responses
     pub max_tokens: u32,
+    /// Max concurrent LLM API requests (default 8)
+    pub concurrency: usize,
 }
 
 /// Authentication method for the API
@@ -47,5 +49,12 @@ impl ScanConfig {
 
     pub fn model() -> String {
         std::env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| "claude-sonnet-4-6".to_string())
+    }
+
+    pub fn concurrency() -> usize {
+        std::env::var("SENTINEL_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8)
     }
 }
