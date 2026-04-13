@@ -82,8 +82,8 @@ async fn main() -> Result<(), anyhow::Error> {
             };
 
             // Verify API key early
-            if ScanConfig::api_key().is_err() {
-                eprintln!("Error: ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN environment variable is not set.");
+            if ScanConfig::provider().is_err() {
+                eprintln!("Error: No LLM API key found. Set one of: OPENAI_API_KEY, ANTHROPIC_AUTH_TOKEN, or ANTHROPIC_API_KEY.");
                 std::process::exit(1);
             }
 

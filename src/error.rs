@@ -11,7 +11,7 @@ pub enum SentinelError {
     #[error("Failed to parse LLM response: {0}")]
     ParseError(String),
 
-    #[error("No API key found. Set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN environment variable.")]
+    #[error("No API key found. Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or ANTHROPIC_AUTH_TOKEN environment variable.")]
     MissingApiKey,
 
     #[error("Glob pattern error: {0}")]

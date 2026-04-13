@@ -146,11 +146,27 @@ sentinel scan --quick --scan-home --ci
 
 ## Configuration
 
-Sentinel supports two authentication methods, selected by the environment variable name:
+Sentinel supports two LLM backends: **Anthropic Messages API** and **OpenAI-compatible Chat Completions API**. The backend is auto-detected from the environment variable you set.
+
+### OpenAI-compatible API
+
+Works with OpenAI, DeepSeek, Groq, Together AI, Ollama, vLLM, and any provider that implements the `/v1/chat/completions` endpoint.
+
+```bash
+export OPENAI_API_KEY=sk-xxxxx
+
+# Optional — custom base URL (default: https://api.openai.com)
+export OPENAI_BASE_URL=https://api.deepseek.com
+
+# Optional — custom model (default: gpt-4o)
+export OPENAI_MODEL=deepseek-chat
+```
+
+### Anthropic API
 
 ```bash
 # Method 1: Anthropic native auth (x-api-key header)
-export ANTHROPIC_API_KEY=sk-xxxxx
+export ANTHROPIC_API_KEY=sk-ant-xxxxx
 
 # Method 2: Bearer token auth (Authorization: Bearer header) — for API proxies
 export ANTHROPIC_AUTH_TOKEN=sk-sp-0xxx
@@ -162,11 +178,39 @@ You can also customize the base URL and model:
 # Optional — custom API base URL (for proxies)
 export ANTHROPIC_BASE_URL=https://your-proxy.example.com
 
-# Optional — custom model
+# Optional — custom model (default: claude-sonnet-4-6)
 export ANTHROPIC_MODEL=claude-sonnet-4-6
+```
 
+### Common options
+
+```bash
 # Optional — max concurrent LLM requests (default: 8)
 export SENTINEL_CONCURRENCY=8
+```
+
+### Provider detection priority
+
+If multiple API keys are set, Sentinel picks the first match:
+
+1. `OPENAI_API_KEY` → OpenAI-compatible Chat Completions API
+2. `ANTHROPIC_AUTH_TOKEN` → Anthropic Messages API (Bearer auth)
+3. `ANTHROPIC_API_KEY` → Anthropic Messages API (native auth)
+
+### Example: DeepSeek
+
+```bash
+export OPENAI_API_KEY=sk-xxxxx
+export OPENAI_BASE_URL=https://api.deepseek.com
+export OPENAI_MODEL=deepseek-chat
+```
+
+### Example: Ollama (local)
+
+```bash
+export OPENAI_API_KEY=ollama
+export OPENAI_BASE_URL=http://localhost:11434
+export OPENAI_MODEL=llama3
 ```
 
 ### Example: DashScope (百炼) proxy
@@ -188,10 +232,18 @@ export ANTHROPIC_API_KEY=sk-ant-xxxxx
 Add to your CI pipeline to block builds with security findings:
 
 ```yaml
+# Using Anthropic
 - name: Security scan
   run: sentinel scan --ci
   env:
     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+# Or using any OpenAI-compatible provider
+- name: Security scan
+  run: sentinel scan --ci
+  env:
+    OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    OPENAI_MODEL: gpt-4o
 ```
 
 Exit code 1 when any finding is `HIGH` or `CRITICAL`.

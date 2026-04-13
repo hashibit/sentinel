@@ -66,7 +66,7 @@ pub async fn analyze_file(
         prompt.push_str(DOT_DIR_EXTRA);
     }
 
-    let response = call_anthropic_api(client, &prompt, config.max_tokens).await?;
+    let response = call_llm_api(client, &prompt, config.max_tokens).await?;
 
     // Parse the JSON response from the model
     let analysis = parse_llm_response(&response)?;
@@ -91,41 +91,62 @@ pub async fn analyze_file(
     })
 }
 
-/// Call Anthropic API via reqwest
-pub async fn call_anthropic_api(
+use crate::config::LlmProvider;
+
+/// Call LLM API via reqwest (auto-detects provider from env)
+pub async fn call_llm_api(
     client: &reqwest::Client,
     prompt: &str,
     max_tokens: u32,
 ) -> Result<String, SentinelError> {
-    let (api_key, auth_type) = ScanConfig::api_key()?;
+    let provider = ScanConfig::provider()?;
+    let model = ScanConfig::model(&provider);
+    let base_url = ScanConfig::base_url(&provider);
 
+    match &provider {
+        LlmProvider::OpenAi { api_key } => {
+            call_openai_api(client, &base_url, api_key, &model, prompt, max_tokens).await
+        }
+        LlmProvider::AnthropicNative { api_key } | LlmProvider::AnthropicBearer { api_key } => {
+            let use_bearer = matches!(provider, LlmProvider::AnthropicBearer { .. });
+            call_anthropic_api(
+                client, &base_url, api_key, use_bearer, &model, prompt, max_tokens,
+            )
+            .await
+        }
+    }
+}
+
+/// Call Anthropic Messages API
+async fn call_anthropic_api(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    use_bearer: bool,
+    model: &str,
+    prompt: &str,
+    max_tokens: u32,
+) -> Result<String, SentinelError> {
     let body = serde_json::json!({
-        "model": ScanConfig::model(),
+        "model": model,
         "max_tokens": max_tokens,
         "messages": [
-            {
-                "role": "user",
-                "content": prompt
-            }
+            { "role": "user", "content": prompt }
         ]
     });
 
-    let base_url = ScanConfig::base_url();
     let endpoint = format!("{base_url}/v1/messages");
 
     let mut req = client
         .post(&endpoint)
         .header("content-type", "application/json");
 
-    match auth_type {
-        crate::config::AuthType::XApiKey => {
-            req = req
-                .header("x-api-key", &api_key)
-                .header("anthropic-version", "2023-06-01");
-        }
-        crate::config::AuthType::Bearer => {
-            req = req.header("authorization", format!("Bearer {api_key}"));
-        }
+    if use_bearer {
+        req = req.header("authorization", format!("Bearer {api_key}"));
+    } else {
+        req = req
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01");
     }
 
     let resp = req
@@ -159,6 +180,65 @@ pub async fn call_anthropic_api(
                 .and_then(|block| block["text"].as_str())
         })
         .ok_or_else(|| SentinelError::ParseError("No text content in API response".into()))?;
+
+    Ok(content.to_string())
+}
+
+/// Call OpenAI-compatible Chat Completions API
+async fn call_openai_api(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    prompt: &str,
+    max_tokens: u32,
+) -> Result<String, SentinelError> {
+    let body = serde_json::json!({
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": [
+            { "role": "user", "content": prompt }
+        ]
+    });
+
+    // Strip trailing /v1 if present — users often include it in the base URL
+    let base = base_url.trim_end_matches('/');
+    let base = base.strip_suffix("/v1").unwrap_or(base);
+    let endpoint = format!("{base}/v1/chat/completions");
+
+    let resp = client
+        .post(&endpoint)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {api_key}"))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| SentinelError::LlmApi(format!("Request failed: {e}")))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp
+            .text()
+            .await
+            .unwrap_or_else(|_| "<no body>".to_string());
+        return Err(SentinelError::LlmApi(format!(
+            "API returned {status}: {text}"
+        )));
+    }
+
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| SentinelError::LlmApi(format!("Failed to parse response: {e}")))?;
+
+    // Extract content from OpenAI response: choices[0].message.content
+    let content = json["choices"]
+        .as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|choice| choice["message"]["content"].as_str())
+        .ok_or_else(|| {
+            SentinelError::ParseError("No content in OpenAI API response".into())
+        })?;
 
     Ok(content.to_string())
 }
